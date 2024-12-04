@@ -17,145 +17,186 @@ import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.visitor.VoidVisitorAdapter;
 
 public class App {
-	private static final String LOCAL_REPO_PATH = "C:/Users/Aravind/eclipse-workspace/Smart-scan/";
-	private static final String LOCAL_TESTS_PATH = "C:/Users/Aravind/eclipse-workspace/Smart-scan/src/test/java";
+    private static final String LOCAL_REPO_PATH = "C:/Users/Aravind/eclipse-workspace/Smart-scan/";
+    private static final String LOCAL_TESTS_PATH = "C:/Users/Aravind/eclipse-workspace/Smart-scan/src/test/java";
 
-	public static void main(String[] args) {
-		try {
-			// Get modified and newly added files
-			Set<String> changedFiles = getChangedFiles();
+    public static void main(String[] args) {
+        try {
+            // Get modified and newly added files
+            Set<String> changedFiles = getChangedFiles();
 
-			if (changedFiles.isEmpty()) {
-				System.out.println("No changes detected.");
-				return;
-			}
+            if (changedFiles.isEmpty()) {
+                System.out.println("No changes detected.");
+                return;
+            }
 
-			System.out.println("Changed files: " + changedFiles);
+            System.out.println("Changed files: " + changedFiles);
 
-			// Analyze affected methods
-			Set<String> affectedMethods = new HashSet<>();
-			for (String filePath : changedFiles) {
-				Path absolutePath = Paths.get(LOCAL_REPO_PATH, filePath);
-				analyzeFileForMethods(absolutePath, affectedMethods);
-			}
+            // Analyze affected methods
+            Set<String> affectedMethods = new HashSet<>();
+            for (String filePath : changedFiles) {
+                // Get the modified methods in this file
+                Set<String> modifiedMethods = getChangedMethods(filePath);
+                
+                System.out.println("Modified file : " + filePath);
+                System.out.println("Modified Method : " + modifiedMethods);
 
-			System.out.println("Affected methods: " + affectedMethods);
+                // Analyze only the methods that were changed
+                Path absolutePath = Paths.get(LOCAL_REPO_PATH, filePath);
+                analyzeChangedMethods(absolutePath, affectedMethods, modifiedMethods);
+            }
 
-			// Find and run related test cases
-			Set<String> relatedTestClasses = findRelatedTestCases(affectedMethods);
-			System.out.println("Related test classes: " + relatedTestClasses);
+            System.out.println("Affected methods: " + affectedMethods);
 
-			executeTestCases(relatedTestClasses);
-		} catch (Exception e) {
-			e.printStackTrace();
-		}
-	}
+            // Find and run related test cases
+            Set<String> relatedTestClasses = findRelatedTestCases(affectedMethods);
+            System.out.println("Related test classes: " + relatedTestClasses);
 
-	/**
-	 * Fetches modified and newly added Java files in the repository.
-	 */
-	private static Set<String> getChangedFiles() throws Exception {
-		File repoDir = new File(LOCAL_REPO_PATH);
-		Git git = Git.open(repoDir);
+            executeTestCases(relatedTestClasses);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
 
-		Status status = git.status().call();
-		Set<String> changedFiles = new HashSet<>(status.getModified());
-		changedFiles.addAll(status.getUntracked());
-		changedFiles.addAll(status.getAdded());
+    /**
+     * Fetches modified and newly added Java files in the repository.
+     */
+    private static Set<String> getChangedFiles() throws Exception {
+        File repoDir = new File(LOCAL_REPO_PATH);
+        Git git = Git.open(repoDir);
 
-		// Filter only Java files
-		return changedFiles.stream().filter(file -> file.endsWith(".java")).collect(Collectors.toSet());
-	}
+        Status status = git.status().call();
+        Set<String> changedFiles = new HashSet<>(status.getModified());
+        changedFiles.addAll(status.getUntracked());
+        changedFiles.addAll(status.getAdded());
 
-	/**
-	 * Analyzes a file to collect method declarations.
-	 */
-	private static void analyzeFileForMethods(Path filePath, Set<String> affectedMethods) {
-		try {
-			if (!Files.exists(filePath)) {
-				System.err.println("File does not exist: " + filePath);
-				return;
-			}
+        // Filter only Java files
+        return changedFiles.stream()
+                .filter(file -> file.endsWith(".java"))
+                .collect(Collectors.toSet());
+    }
 
-			String content = Files.readString(filePath);
-			CompilationUnit cu = StaticJavaParser.parse(content);
+    /**
+     * Detects the changed methods by analyzing the git diff output.
+     */
+    private static Set<String> getChangedMethods(String filePath) throws Exception {
+        Set<String> modifiedMethods = new HashSet<>();
 
-			cu.accept(new VoidVisitorAdapter<Set<String>>() {
-				@Override
-				public void visit(MethodDeclaration md, Set<String> collector) {
-					super.visit(md, collector);
-					collector.add(md.getNameAsString());
-				}
-			}, affectedMethods);
-		} catch (Exception e) {
-			e.printStackTrace();
-		}
-	}
+        // Run git diff to find changes in the file
+        ProcessBuilder builder = new ProcessBuilder("git", "diff", "--name-only", "HEAD", filePath);
+        builder.directory(new File(LOCAL_REPO_PATH));
+        Process process = builder.start();
+        process.waitFor();
 
-	/**
-	 * Finds related test cases by matching affected methods to test methods.
-	 */
-	private static Set<String> findRelatedTestCases(Set<String> affectedMethods) {
-		Set<String> relatedTests = new HashSet<>();
-		try {
-			Files.walk(Paths.get(LOCAL_TESTS_PATH)).filter(path -> path.toString().endsWith(".java"))
-					.forEach(testFile -> {
-						try {
-							String content = Files.readString(testFile);
-							CompilationUnit cu = StaticJavaParser.parse(content);
+        // Read the output of git diff to detect which methods are affected
+        String diffOutput = new String(process.getInputStream().readAllBytes());
 
-							// Get the class name and ensure it's a valid test class (ends with 'Test')
-							String className = cu.getPrimaryTypeName().orElse("");
-							if (className.startsWith("Test") || className.endsWith("Test")) {
-								// Search for @Test annotation and check method invocations
-								cu.accept(new VoidVisitorAdapter<Void>() {
-									@Override
-									public void visit(MethodDeclaration md, Void arg) {
-										super.visit(md, arg);
+        // Parse through the diff output to detect changed methods (simplified for now)
+        String[] diffLines = diffOutput.split("\n");
+        for (String line : diffLines) {
+            if (line.startsWith("diff")) {
+                // This is where you would extract method names from the diff output
+                String methodName = line;  // You'll need to extract method name from the diff output
+                modifiedMethods.add(methodName);
+            }
+        }
 
-										// Check if the method has @Test annotation
-										if (md.isAnnotationPresent(org.junit.Test.class)) {
-											// Check if any affected method is invoked inside this method
-											md.getBody().ifPresent(body -> body.accept(new VoidVisitorAdapter<Void>() {
-												@Override
-												public void visit(com.github.javaparser.ast.expr.MethodCallExpr mce,
-														Void arg) {
-													super.visit(mce, arg);
-													// Check if the method call matches any affected method
-													if (affectedMethods.contains(mce.getNameAsString())) {
-														relatedTests.add(className);
-													}
-												}
-											}, arg));
-										}
-									}
-								}, null);
-							}
-						} catch (Exception e) {
-							e.printStackTrace();
-						}
-					});
-		} catch (Exception e) {
-			e.printStackTrace();
-		}
-		return relatedTests;
-	}
+        return modifiedMethods;
+    }
 
-	/**
-	 * Executes the related test cases using Maven.
-	 */
-	private static void executeTestCases(Set<String> testClasses) {
-		try {
-			for (String testClass : testClasses) {
-				System.out.println("Running test class: " + testClass);
-				ProcessBuilder builder = new ProcessBuilder("mvn", "test", "-Dtest=" + testClass);
-				builder.directory(new File(LOCAL_REPO_PATH));
-				Process process = builder.start();
-				process.waitFor();
-				System.out.println("Executed test class: " + testClass);
-			}
-		} catch (Exception e) {
-			e.printStackTrace();
-		}
-	}
+    /**
+     * Analyzes a file to collect method declarations only for modified methods.
+     */
+    private static void analyzeChangedMethods(Path filePath, Set<String> affectedMethods, Set<String> modifiedMethods) {
+        try {
+            if (!Files.exists(filePath)) {
+                System.err.println("File does not exist: " + filePath);
+                return;
+            }
+
+            String content = Files.readString(filePath);
+            CompilationUnit cu = StaticJavaParser.parse(content);
+
+            cu.accept(new VoidVisitorAdapter<Set<String>>() {
+                @Override
+                public void visit(MethodDeclaration md, Set<String> collector) {
+                    super.visit(md, collector);
+
+                    // Only add the method if it is in the modified set
+                    if (modifiedMethods.contains(md.getNameAsString())) {
+                        collector.add(md.getNameAsString());
+                    }
+                }
+            }, affectedMethods);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Finds related test cases by matching affected methods to test methods.
+     */
+    private static Set<String> findRelatedTestCases(Set<String> affectedMethods) {
+        Set<String> relatedTests = new HashSet<>();
+        try {
+            Files.walk(Paths.get(LOCAL_TESTS_PATH)).filter(path -> path.toString().endsWith(".java"))
+                    .forEach(testFile -> {
+                        try {
+                            String content = Files.readString(testFile);
+                            CompilationUnit cu = StaticJavaParser.parse(content);
+
+                            // Get the class name and ensure it's a valid test class (ends with 'Test')
+                            String className = cu.getPrimaryTypeName().orElse("");
+                            if (className.startsWith("Test") || className.endsWith("Test")) {
+                                // Search for @Test annotation and check method invocations
+                                cu.accept(new VoidVisitorAdapter<Void>() {
+                                    @Override
+                                    public void visit(MethodDeclaration md, Void arg) {
+                                        super.visit(md, arg);
+
+                                        // Check if the method has @Test annotation
+                                        if (md.isAnnotationPresent(org.junit.Test.class)) {
+                                            // Check if any affected method is invoked inside this method
+                                            md.getBody().ifPresent(body -> body.accept(new VoidVisitorAdapter<Void>() {
+                                                @Override
+                                                public void visit(com.github.javaparser.ast.expr.MethodCallExpr mce,
+                                                        Void arg) {
+                                                    super.visit(mce, arg);
+                                                    // Check if the method call matches any affected method
+                                                    if (affectedMethods.contains(mce.getNameAsString())) {
+                                                        relatedTests.add(className);
+                                                    }
+                                                }
+                                            }, arg));
+                                        }
+                                    }
+                                }, null);
+                            }
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                        }
+                    });
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return relatedTests;
+    }
+
+    /**
+     * Executes the related test cases using Maven.
+     */
+    private static void executeTestCases(Set<String> testClasses) {
+        try {
+            for (String testClass : testClasses) {
+                System.out.println("Running test class: " + testClass);
+                ProcessBuilder builder = new ProcessBuilder("mvn", "test", "-Dtest=" + testClass);
+                builder.directory(new File(LOCAL_REPO_PATH));
+                Process process = builder.start();
+                process.waitFor();
+                System.out.println("Executed test class: " + testClass);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
 }

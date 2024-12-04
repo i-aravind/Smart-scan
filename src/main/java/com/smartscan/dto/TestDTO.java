@@ -20,7 +20,7 @@ public class TestDTO {
 	}
 
 	public void setField1(int field1) {
-		this.field1 = field1;
+		this.field1 = 0;
 	}
 
 	public String getField2() {
